@@ -1,5 +1,5 @@
 """Phase B fine-tune: continues a Phase A checkpoint on the self-distilled
-(query -> structured plan + code) dataset from distill_dataset.py, so the
+(query -> structured plan + code) dataset from synth_dataset.py, so the
 from-scratch model learns to emit the same schema `ScientificAnalysis` uses.
 
 Loss is masked on the prompt tokens (query + tags) — only the JSON response
@@ -95,7 +95,7 @@ def load_records(path: Path) -> list[dict]:
 def main() -> None:
     p = argparse.ArgumentParser(description="Phase B fine-tune on the self-distilled dataset")
     p.add_argument("--base-checkpoint", type=Path, required=True, help="Phase A checkpoint to continue from")
-    p.add_argument("--dataset-path", type=Path, required=True, help="JSONL from distill_dataset.py")
+    p.add_argument("--dataset-path", type=Path, required=True, help="JSONL from synth_dataset.py")
     p.add_argument("--tokenizer-path", type=Path, default=Path(__file__).parent / "tokenizer" / "tokenizer.json")
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--resume", action="store_true", help="Resume from ckpt_latest.pt in --out-dir if present, else start from --base-checkpoint")

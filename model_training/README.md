@@ -9,6 +9,15 @@ and rationale.
 This is explicitly a **months-long project run on Google Colab**, not a
 quick script. Progress is tracked here as milestones complete.
 
+**No Anthropic dependency**: this pipeline (corpus prep, tokenizer, Phase A
+pretraining, Phase B fine-tune) is fully self-contained and never calls
+Claude or imports `sci_engine`/`anthropic`. Phase B's training data comes
+from `synth_dataset.py`, which generates (query, structured plan + code)
+pairs from hand-written physics formulas, not from an LLM. (An earlier
+version used Claude-distillation via `distill_dataset.py` — the checkpoints
+already trained on that data were kept as-is; this pipeline replaces it
+going forward.)
+
 ## Roadmap
 
 - [x] Milestone 1 — Scaffold + local smoke test (architecture + training loop
@@ -16,9 +25,9 @@ quick script. Progress is tracked here as milestones complete.
 - [ ] Milestone 2 — Real corpus (arXiv abstracts, Wikipedia STEM, OpenStax,
       filtered scientific code) + trained BPE tokenizer
 - [ ] Milestone 3 — Phase A pretraining on Colab (GPT-2-124M-class model)
-- [ ] Milestone 4 — Self-distillation dataset from the existing Claude-backed
-      pipeline
-- [ ] Milestone 5 — Phase B fine-tune on the distilled (query -> structured
+- [x] Milestone 4 — Synthetic Phase B dataset generated from hand-written
+      physics formulas (`synth_dataset.py`), no Anthropic dependency
+- [ ] Milestone 5 — Phase B fine-tune on the synthetic (query -> structured
       plan + code) dataset
 - [ ] Milestone 6 — Eval harness + `local_router.py` integration into
       `sci_engine`

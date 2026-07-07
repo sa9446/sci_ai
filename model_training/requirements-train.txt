@@ -1,15 +1,8 @@
 # Training-only dependencies. Kept separate from the main sci_ai_engine
-# requirements.txt so the Claude-backed pipeline never needs torch/tokenizers.
+# requirements.txt so this pipeline never needs anthropic/pydantic — it has
+# no dependency on the Claude-backed sci_engine package at all.
 torch>=2.3.0
 tokenizers>=0.19.0
 numpy>=1.26.4
 tqdm>=4.66.0
 requests>=2.32.0
-
-# distill_dataset.py imports sci_engine (the parent project's Claude-backed
-# pipeline) unmodified to generate Phase B training data, so its deps are
-# needed here too.
-anthropic>=0.34.0
-pydantic>=2.8.0
-pydantic-settings>=2.4.0
-typing-extensions>=4.12.0
