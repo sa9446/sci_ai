@@ -27,9 +27,22 @@ from pathlib import Path
 import requests
 
 ARXIV_API = "http://export.arxiv.org/api/query"
-ARXIV_CATEGORIES = ["physics", "math", "cs.LG", "astro-ph", "cond-mat", "quant-ph"]
+# "physics" and "math" alone are archive groupings, not searchable cat: tags —
+# arXiv's cat: search silently returns 0 results for them (confirmed against
+# the live API; totalResults=0 for both), so they're replaced with actual
+# leaf category codes below. The other four were already valid leaf/archive
+# codes and verified to return real results.
+ARXIV_CATEGORIES = [
+    "physics.gen-ph", "physics.class-ph",  # replaces the dead "physics" entry
+    "math.CA", "math.NA",                  # replaces the dead "math" entry
+    "cs.LG", "astro-ph", "cond-mat", "quant-ph",
+]
 
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+# Wikipedia's API rejects requests with no/generic User-Agent (403 "Please
+# set a user-agent and respect our robot policy") — requests' default UA
+# doesn't satisfy it.
+WIKIPEDIA_USER_AGENT = "sci_ai_engine-corpus-fetch/1.0 (https://github.com/sa9446/sci_ai)"
 WIKIPEDIA_STEM_CATEGORIES = [
     "Category:Physics", "Category:Mathematics", "Category:Chemistry",
     "Category:Astronomy", "Category:Thermodynamics", "Category:Quantum mechanics",
@@ -74,6 +87,7 @@ def fetch_arxiv_abstracts(out_path: Path, max_results_per_category: int = 2000) 
 
 def fetch_wikipedia_stem(out_path: Path, max_pages_per_category: int = 300) -> None:
     session = requests.Session()
+    session.headers.update({"User-Agent": WIKIPEDIA_USER_AGENT})
     texts: list[str] = []
     seen_titles: set[str] = set()
 
@@ -100,12 +114,22 @@ def fetch_wikipedia_stem(out_path: Path, max_pages_per_category: int = 300) -> N
 
             titles = [m["title"] for m in members if m["title"] not in seen_titles]
             seen_titles.update(titles)
-            if titles:
+            # The extracts API only allows batching multiple pages per call
+            # (exlimit > 1) when exintro=1 (intro section only) — requesting
+            # full article text is hard-capped at 1 page per call regardless
+            # of exlimit ("exlimit was too large for a whole article extracts
+            # request, lowered to 1", confirmed against the live API). Intro
+            # text is shorter per page, but that's what makes batching (and
+            # therefore a corpus of thousands of pages) practical at all.
+            for i in range(0, len(titles), 20):
+                title_chunk = titles[i:i + 20]
                 extract_params = {
                     "action": "query",
                     "prop": "extracts",
                     "explaintext": 1,
-                    "titles": "|".join(titles),
+                    "exintro": 1,
+                    "exlimit": "max",
+                    "titles": "|".join(title_chunk),
                     "format": "json",
                 }
                 eresp = session.get(WIKIPEDIA_API, params=extract_params, timeout=30)
