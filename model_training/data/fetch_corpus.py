@@ -156,17 +156,25 @@ def main() -> None:
     p.add_argument("--skip-wikipedia", action="store_true")
     p.add_argument("--code-repos-dir", type=Path, default=Path(__file__).parent / "raw" / "code_repos",
                     help="Directory where you've manually cloned permissively-licensed sci-Python repos")
+    p.add_argument("--arxiv-max-per-category", type=int, default=2000,
+                    help="Abstracts fetched per ARXIV_CATEGORIES entry. The default (2000, ~12K abstracts "
+                         "total, roughly a few million tokens) is too small to pretrain a 110M-param model "
+                         "without overfitting within a few hundred iterations — go much larger (10000+) for "
+                         "a real Phase A run.")
+    p.add_argument("--wikipedia-max-pages-per-category", type=int, default=300,
+                    help="Pages fetched per WIKIPEDIA_STEM_CATEGORIES entry. Same undersized-default caveat "
+                         "as --arxiv-max-per-category.")
     args = p.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.skip_arxiv:
         print("Fetching arXiv abstracts ...")
-        fetch_arxiv_abstracts(args.out_dir / "arxiv_abstracts.txt")
+        fetch_arxiv_abstracts(args.out_dir / "arxiv_abstracts.txt", max_results_per_category=args.arxiv_max_per_category)
 
     if not args.skip_wikipedia:
         print("Fetching Wikipedia STEM articles ...")
-        fetch_wikipedia_stem(args.out_dir / "wikipedia_stem.txt")
+        fetch_wikipedia_stem(args.out_dir / "wikipedia_stem.txt", max_pages_per_category=args.wikipedia_max_pages_per_category)
 
     print("Scanning local scientific code repos ...")
     scan_scientific_code(args.code_repos_dir, args.out_dir / "scientific_code.txt")
