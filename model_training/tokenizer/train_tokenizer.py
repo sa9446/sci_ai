@@ -7,9 +7,13 @@ token-id shards, and its vocab_size feeds train.py's --vocab-size.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from tokenizers import ByteLevelBPETokenizer
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from schema_format import EOT_TAG, QUERY_TAG, RESPONSE_TAG  # noqa: E402
 
 
 def main() -> None:
@@ -34,7 +38,11 @@ def main() -> None:
         files=files,
         vocab_size=args.vocab_size,
         min_frequency=args.min_frequency,
-        special_tokens=["<|endoftext|>", "<|pad|>"],
+        # EOT_TAG/QUERY_TAG/RESPONSE_TAG must be atomic tokens, not split into
+        # byte-level sub-tokens, since schema_format.py's split_prompt_len()
+        # counts tokens up to RESPONSE_TAG to mask the loss on the prompt —
+        # imported from schema_format so this can't drift out of sync with it.
+        special_tokens=[EOT_TAG, "<|pad|>", QUERY_TAG, RESPONSE_TAG],
     )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
