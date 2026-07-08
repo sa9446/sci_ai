@@ -51,37 +51,69 @@ WIKIPEDIA_STEM_CATEGORIES = [
 SCI_CODE_IMPORT_PATTERN = re.compile(r"^\s*(import|from)\s+(numpy|scipy|sympy)\b", re.MULTILINE)
 
 
+def _get_with_retry(session: requests.Session, url: str, params: dict, timeout: int = 30,
+                     retries: int = 4, backoff: float = 5.0) -> requests.Response:
+    """arXiv's API is known to intermittently 500, especially at deep
+    pagination offsets (confirmed live: start=10000 on a valid category threw
+    a 500). A single transient failure shouldn't kill a 30+ minute fetch run."""
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            resp = session.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except (requests.exceptions.HTTPError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            last_exc = exc
+            wait = backoff * (2 ** attempt)
+            print(f"    request failed ({exc}) — retry {attempt + 1}/{retries} in {wait:.0f}s")
+            time.sleep(wait)
+    raise last_exc  # noqa: RSE102 — re-raising the last captured exception is intentional
+
+
 def fetch_arxiv_abstracts(out_path: Path, max_results_per_category: int = 2000) -> None:
+    session = requests.Session()
     lines: list[str] = []
+
+    def _flush() -> None:
+        # Written after every category (not just once at the end) so a late
+        # failure — even after retries are exhausted — doesn't discard
+        # everything fetched before it.
+        out_path.write_text("\n\n".join(lines), encoding="utf-8")
+
     for category in ARXIV_CATEGORIES:
         start = 0
         page_size = 200
         fetched = 0
-        while fetched < max_results_per_category:
-            params = {
-                "search_query": f"cat:{category}",
-                "start": start,
-                "max_results": min(page_size, max_results_per_category - fetched),
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            }
-            resp = requests.get(ARXIV_API, params=params, timeout=30)
-            resp.raise_for_status()
-            root = ET.fromstring(resp.text)
-            ns = {"atom": "http://www.w3.org/2005/Atom"}
-            entries = root.findall("atom:entry", ns)
-            if not entries:
-                break
-            for entry in entries:
-                summary = entry.find("atom:summary", ns)
-                if summary is not None and summary.text:
-                    lines.append(summary.text.strip().replace("\n", " "))
-            fetched += len(entries)
-            start += len(entries)
-            time.sleep(3)  # arXiv API rate-limit courtesy delay
+        try:
+            while fetched < max_results_per_category:
+                params = {
+                    "search_query": f"cat:{category}",
+                    "start": start,
+                    "max_results": min(page_size, max_results_per_category - fetched),
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                }
+                resp = _get_with_retry(session, ARXIV_API, params)
+                root = ET.fromstring(resp.text)
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                entries = root.findall("atom:entry", ns)
+                if not entries:
+                    break
+                for entry in entries:
+                    summary = entry.find("atom:summary", ns)
+                    if summary is not None and summary.text:
+                        lines.append(summary.text.strip().replace("\n", " "))
+                fetched += len(entries)
+                start += len(entries)
+                time.sleep(3)  # arXiv API rate-limit courtesy delay
+        except Exception as exc:  # noqa: BLE001 — keep whatever other categories can still complete
+            print(f"  arXiv[{category}]: FAILED after {fetched} abstracts ({exc}) — moving on")
+            _flush()
+            continue
         print(f"  arXiv[{category}]: {fetched} abstracts")
+        _flush()
 
-    out_path.write_text("\n\n".join(lines), encoding="utf-8")
     print(f"Wrote {len(lines)} arXiv abstracts to {out_path}")
 
 
@@ -91,63 +123,71 @@ def fetch_wikipedia_stem(out_path: Path, max_pages_per_category: int = 300) -> N
     texts: list[str] = []
     seen_titles: set[str] = set()
 
+    def _flush() -> None:
+        # Written after every category (not just once at the end) so a late
+        # failure doesn't discard everything fetched before it.
+        out_path.write_text("\n\n".join(texts), encoding="utf-8")
+
     for category in WIKIPEDIA_STEM_CATEGORIES:
         cmcontinue = None
         collected = 0
-        while collected < max_pages_per_category:
-            params = {
-                "action": "query",
-                "list": "categorymembers",
-                "cmtitle": category,
-                "cmlimit": min(100, max_pages_per_category - collected),
-                "cmtype": "page",
-                "format": "json",
-            }
-            if cmcontinue:
-                params["cmcontinue"] = cmcontinue
-            resp = session.get(WIKIPEDIA_API, params=params, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-            members = data.get("query", {}).get("categorymembers", [])
-            if not members:
-                break
-
-            titles = [m["title"] for m in members if m["title"] not in seen_titles]
-            seen_titles.update(titles)
-            # The extracts API only allows batching multiple pages per call
-            # (exlimit > 1) when exintro=1 (intro section only) — requesting
-            # full article text is hard-capped at 1 page per call regardless
-            # of exlimit ("exlimit was too large for a whole article extracts
-            # request, lowered to 1", confirmed against the live API). Intro
-            # text is shorter per page, but that's what makes batching (and
-            # therefore a corpus of thousands of pages) practical at all.
-            for i in range(0, len(titles), 20):
-                title_chunk = titles[i:i + 20]
-                extract_params = {
+        try:
+            while collected < max_pages_per_category:
+                params = {
                     "action": "query",
-                    "prop": "extracts",
-                    "explaintext": 1,
-                    "exintro": 1,
-                    "exlimit": "max",
-                    "titles": "|".join(title_chunk),
+                    "list": "categorymembers",
+                    "cmtitle": category,
+                    "cmlimit": min(100, max_pages_per_category - collected),
+                    "cmtype": "page",
                     "format": "json",
                 }
-                eresp = session.get(WIKIPEDIA_API, params=extract_params, timeout=30)
-                eresp.raise_for_status()
-                pages = eresp.json().get("query", {}).get("pages", {})
-                for page in pages.values():
-                    extract = page.get("extract", "")
-                    if extract:
-                        texts.append(extract)
+                if cmcontinue:
+                    params["cmcontinue"] = cmcontinue
+                resp = _get_with_retry(session, WIKIPEDIA_API, params)
+                data = resp.json()
+                members = data.get("query", {}).get("categorymembers", [])
+                if not members:
+                    break
 
-            collected += len(members)
-            cmcontinue = data.get("continue", {}).get("cmcontinue")
-            if not cmcontinue:
-                break
-            time.sleep(1)
+                titles = [m["title"] for m in members if m["title"] not in seen_titles]
+                seen_titles.update(titles)
+                # The extracts API only allows batching multiple pages per call
+                # (exlimit > 1) when exintro=1 (intro section only) — requesting
+                # full article text is hard-capped at 1 page per call regardless
+                # of exlimit ("exlimit was too large for a whole article extracts
+                # request, lowered to 1", confirmed against the live API). Intro
+                # text is shorter per page, but that's what makes batching (and
+                # therefore a corpus of thousands of pages) practical at all.
+                for i in range(0, len(titles), 20):
+                    title_chunk = titles[i:i + 20]
+                    extract_params = {
+                        "action": "query",
+                        "prop": "extracts",
+                        "explaintext": 1,
+                        "exintro": 1,
+                        "exlimit": "max",
+                        "titles": "|".join(title_chunk),
+                        "format": "json",
+                    }
+                    eresp = _get_with_retry(session, WIKIPEDIA_API, extract_params)
+                    pages = eresp.json().get("query", {}).get("pages", {})
+                    for page in pages.values():
+                        extract = page.get("extract", "")
+                        if extract:
+                            texts.append(extract)
+
+                collected += len(members)
+                cmcontinue = data.get("continue", {}).get("cmcontinue")
+                if not cmcontinue:
+                    break
+                time.sleep(1)
+        except Exception as exc:  # noqa: BLE001 — keep whatever other categories can still complete
+            print(f"  Wikipedia[{category}]: FAILED after {collected} pages ({exc}) — moving on")
+            _flush()
+            continue
         print(f"  Wikipedia[{category}]: {collected} pages")
+        _flush()
 
-    out_path.write_text("\n\n".join(texts), encoding="utf-8")
     print(f"Wrote {len(texts)} Wikipedia STEM articles to {out_path}")
 
 
