@@ -106,6 +106,7 @@ def fetch_arxiv_abstracts(out_path: Path, max_results_per_category: int = 2000) 
                         lines.append(summary.text.strip().replace("\n", " "))
                 fetched += len(entries)
                 start += len(entries)
+                print(f"    arXiv[{category}]: {fetched}/{max_results_per_category} abstracts fetched")
                 time.sleep(3)  # arXiv API rate-limit courtesy delay
         except Exception as exc:  # noqa: BLE001 — keep whatever other categories can still complete
             print(f"  arXiv[{category}]: FAILED after {fetched} abstracts ({exc}) — moving on")
@@ -177,6 +178,7 @@ def fetch_wikipedia_stem(out_path: Path, max_pages_per_category: int = 300) -> N
                             texts.append(extract)
 
                 collected += len(members)
+                print(f"    Wikipedia[{category}]: {collected}/{max_pages_per_category} pages fetched")
                 cmcontinue = data.get("continue", {}).get("cmcontinue")
                 if not cmcontinue:
                     break
